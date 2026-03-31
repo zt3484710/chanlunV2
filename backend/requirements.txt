@@ -7,7 +7,7 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-akshare==1.18.49
+baostock==0.8.8
 pandas==2.2.3
 numpy==2.1.1
 requests==2.32.3

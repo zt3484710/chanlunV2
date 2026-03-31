@@ -6,7 +6,12 @@ export const authApi = {
     return api.post<UserOut>('/auth/register', { username, password, nickname })
   },
   login(username: string, password: string) {
-    return api.post<Token>('/auth/login', { username, password })
+    const params = new URLSearchParams()
+    params.append('username', username)
+    params.append('password', password)
+    return api.post<Token>('/auth/login', params, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    })
   },
   me() {
     return api.get<UserOut>('/auth/me')

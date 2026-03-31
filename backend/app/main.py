@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
-from app.routers import auth, watchlist, stocks
+from app.routers import auth, watchlist, stocks, chanlun_analysis
 
 # 创建表（如果不存在）
 Base.metadata.create_all(bind=engine)
@@ -23,6 +23,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(watchlist.router)
 app.include_router(stocks.router)
+app.include_router(chanlun_analysis.router)
 
 
 @app.get("/api/health")

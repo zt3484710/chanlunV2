@@ -13,9 +13,9 @@
       </div>
     </div>
 
-    <!-- K线图 -->
-    <div class="chart-section">
-      <div class="chart-title">K线</div>
+    <!-- K线图（叠加缠论） -->
+    <div class="chart-section" style="flex: 2">
+      <div class="chart-title">K线 + 缠论结构</div>
       <div ref="klineRef" class="chart-container"></div>
     </div>
 
@@ -25,34 +25,68 @@
       <div ref="macdRef" class="chart-container"></div>
     </div>
 
-    <!-- 加载状态 -->
-    <n-spin :show="loading">
-      <div v-if="!hasData && !loading" class="no-data">暂无数据，请检查股票代码</div>
-    </n-spin>
+    <!-- 缠论结构面板 -->
+    <div class="chanlun-panel" v-if="chanlunData.zhongshu_list?.length">
+      <div class="panel-title">中枢 ({{ chanlunData.zhongshu_list?.length }})</div>
+      <div class="panel-items">
+        <div v-for="(zs, i) in chanlunData.zhongshu_list" :key="i" class="zs-item">
+          <span class="zs-badge">中枢{{ i + 1 }}</span>
+          <span>ZD: {{ zs.zd?.toFixed(2) }}</span>
+          <span>ZG: {{ zs.zg?.toFixed(2) }}</span>
+          <span>中枢价: {{ zs.center?.toFixed(2) }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 信号面板 -->
+    <div class="signals-panel" v-if="chanlunData.signals?.length">
+      <div class="panel-title">买卖点信号 ({{ chanlunData.signals?.length }})</div>
+      <div class="panel-items">
+        <n-tag v-for="(sig, i) in chanlunData.signals" :key="i" :type="signalTagType(sig.type)" size="small">
+          {{ signalLabel(sig.type) }} {{ sig.date }} {{ sig.price?.toFixed(2) }}
+        </n-tag>
+      </div>
+    </div>
+
+    <!-- 背驰面板 -->
+    <div class="divergence-panel" v-if="chanlunData.divergence_list?.length">
+      <div class="panel-title">背驰 ({{ chanlunData.divergence_list?.length }})</div>
+      <div class="panel-items">
+        <n-tag v-for="(d, i) in chanlunData.divergence_list" :key="i" :type="d.type === 'top' ? 'error' : 'success'" size="small">
+          {{ d.type === 'top' ? '顶背驰' : '底背驰' }} {{ d.date }} 强度{{ (d.strength * 100).toFixed(0) }}%
+        </n-tag>
+      </div>
+    </div>
+
+    <n-spin :show="loading" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NSelect, NSpin, useMessage } from 'naive-ui'
+import { NButton, NSelect, NSpin, NTag } from 'naive-ui'
 import * as echarts from 'echarts'
-import { stocksApi } from '@/api/stocks'
+import api from '@/api/axios'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
-const message = useMessage()
+const auth = useAuthStore()
 
 const stockCode = ref(route.params.code as string)
 const period = ref('daily')
 const adjust = ref('qfq')
 const loading = ref(false)
-const hasData = ref(false)
 
 const klineRef = ref<HTMLDivElement>()
 const macdRef = ref<HTMLDivElement>()
 let klineChart: echarts.ECharts | null = null
 let macdChart: echarts.ECharts | null = null
+
+const klineData = ref<any[]>([])
+const macdData = ref<any[]>([])
+const chanlunData = ref<any>({})
 
 const periodOptions = [
   { label: '日线', value: 'daily' },
@@ -64,81 +98,127 @@ const adjustOptions = [
   { label: '后复权', value: 'hfq' },
 ]
 
-onMounted(() => {
-  initCharts()
-  loadData()
-  window.addEventListener('resize', handleResize)
-})
-
-onUnmounted(() => {
-  klineChart?.dispose()
-  macdChart?.dispose()
-  window.removeEventListener('resize', handleResize)
-})
-
-function initCharts() {
-  if (klineRef.value) {
-    klineChart = echarts.init(klineRef.value)
+const signalLabel = (type: string) => {
+  const map: Record<string, string> = {
+    buy1: '一买', buy2: '二买', buy3: '三买',
+    sell1: '一卖', sell2: '二卖', sell3: '三卖',
   }
-  if (macdRef.value) {
-    macdChart = echarts.init(macdRef.value)
-  }
+  return map[type] || type
 }
 
-function handleResize() {
-  klineChart?.resize()
-  macdChart?.resize()
+const signalTagType = (type: string) => {
+  if (type.startsWith('buy')) return 'success'
+  if (type.startsWith('sell')) return 'error'
+  return 'default'
+}
+
+onMounted(() => { initCharts(); loadData() })
+onUnmounted(() => { klineChart?.dispose(); macdChart?.dispose() })
+
+function initCharts() {
+  if (klineRef.value) klineChart = echarts.init(klineRef.value)
+  if (macdRef.value) macdChart = echarts.init(macdRef.value)
 }
 
 async function loadData() {
   loading.value = true
   try {
-    const { data } = await stocksApi.getKline(stockCode.value, period.value, adjust.value)
-    if (data.error) {
-      message.error(data.error)
-      return
-    }
-    hasData.value = true
-    renderKline(data.kline)
-    renderMACD(data.macd)
-  } catch (e: any) {
-    message.error('加载数据失败：' + (e.message || '未知错误'))
+    const token = localStorage.getItem('token')
+    const headers = { Authorization: `Bearer ${token}` }
+
+    // 并行请求K线和缠论数据
+    const [kRes, clRes] = await Promise.all([
+      api.get('/stocks/kline', { params: { stock_code: stockCode.value, period: period.value, adjust: adjust.value }, headers }),
+      api.get('/chanlun/analyze', { params: { stock_code: stockCode.value, period: period.value, adjust: adjust.value }, headers }),
+    ])
+
+    klineData.value = kRes.data.kline || []
+    macdData.value = kRes.data.macd || []
+    chanlunData.value = clRes.data || {}
+
+    renderKline()
+    renderMACD()
   } finally {
     loading.value = false
   }
 }
 
-function renderKline(kline: any[]) {
-  if (!klineChart || !kline.length) return
+function renderKline() {
+  if (!klineChart || !klineData.value.length) return
 
-  const dates = kline.map((d: any) => d.date?.split(' ')[0] || d.date)
-  const data = kline.map((d: any) => [d.open, d.close, d.low, d.high])
+  const dates = klineData.value.map((d: any) => d.date?.split('T')[0])
+  const ohlc = klineData.value.map((d: any) => [d.open, d.close, d.low, d.high])
 
-  const option: echarts.EChartsOption = {
+  // 缠论数据
+  const fenxing = chanlunData.value.fenxing_list || []
+  const bi = chanlunData.value.bi_list || []
+  const zhongshu = chanlunData.value.zhongshu_list || []
+  const signals = chanlunData.value.signals || []
+
+  // 分型标注
+  const fenxingMark = fenxing.map((f: any) => ({
+    coord: [f.index, f.price],
+    symbol: f.type === 'top' ? 'triangle' : 'triangle',
+    symbolSize: f.type === 'top' ? 8 : 8,
+    itemStyle: { color: f.type === 'top' ? '#ef5350' : '#26a69a' },
+  }))
+
+  // 笔 markLine
+  const biMarkLines: any[] = []
+  bi.forEach((b: any) => {
+    biMarkLines.push({
+      xAxis: b.start_index,
+      yAxis: b.start_price,
+      xAxis2: b.end_index,
+      yAxis2: b.end_price,
+      lineStyle: { color: b.direction === 'up' ? '#ef5350' : '#26a69a', width: 1.5, type: 'solid' },
+    })
+  })
+
+  // 中枢 markArea
+  const zsMarkAreas: any[] = []
+  zhongshu.forEach((zs: any) => {
+    zsMarkAreas.push([
+      { xAxis: zs.start_index, yAxis: zs.zd, itemStyle: { color: 'rgba(255,215,0,0.15)' } },
+      { xAxis: zs.end_index, yAxis: zs.zg },
+    ])
+  })
+
+  // 买卖点标注
+  const signalMark = signals.map((s: any) => ({
+    coord: [s.position, s.price],
+    symbol: s.type.startsWith('buy') ? 'circle' : 'diamond',
+    symbolSize: 10,
+    itemStyle: { color: s.type.startsWith('buy') ? '#18a058' : '#d43030' },
+  }))
+
+  klineChart.setOption({
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-    grid: [{ left: '8%', right: '2%', top: '10%', height: '75%' }],
+    grid: [{ left: '8%', right: '2%', top: '8%', height: '75%' }],
     xAxis: [{ type: 'category', data: dates, axisLabel: { fontSize: 10 } }],
     yAxis: [{ scale: true, axisLabel: { fontSize: 10 } }],
     series: [
       {
         type: 'candlestick',
-        data,
+        data: ohlc,
         itemStyle: { color: '#ef5350', color0: '#26a69a' },
+        markPoint: { data: [...fenxingMark, ...signalMark] },
+        markLine: { silent: true, symbol: 'none', data: biMarkLines },
+        markArea: { silent: true, data: zsMarkAreas },
       },
     ],
-  }
-  klineChart.setOption(option, true)
+  }, true)
 }
 
-function renderMACD(macd: any[]) {
-  if (!macdChart || !macd.length) return
+function renderMACD() {
+  if (!macdChart || !macdData.value.length) return
 
-  const dates = macd.map((d: any) => d.date?.split(' ')[0] || d.date)
-  const dif = macd.map((d: any) => d.dif)
-  const dea = macd.map((d: any) => d.dea)
-  const bar = macd.map((d: any) => d.macd)
+  const dates = macdData.value.map((d: any) => d.date?.split('T')[0])
+  const dif = macdData.value.map((d: any) => d.dif)
+  const dea = macdData.value.map((d: any) => d.dea)
+  const bar = macdData.value.map((d: any) => d.macd)
 
-  const option: echarts.EChartsOption = {
+  macdChart.setOption({
     legend: { data: ['DIF', 'DEA'], top: 0 },
     tooltip: { trigger: 'axis' },
     grid: [{ left: '8%', right: '2%', top: '15%', height: '40%' }],
@@ -149,19 +229,18 @@ function renderMACD(macd: any[]) {
       { name: 'DEA', type: 'line', data: dea, smooth: true },
       {
         type: 'bar',
-        data: bar.map((v: number) => (v >= 0 ? v : 0)),
+        data: bar.map((v: number) => v >= 0 ? v : 0),
         itemStyle: { color: '#ef5350' },
         barMaxWidth: 6,
       },
       {
         type: 'bar',
-        data: bar.map((v: number) => (v < 0 ? v : 0)),
+        data: bar.map((v: number) => v < 0 ? v : 0),
         itemStyle: { color: '#26a69a' },
         barMaxWidth: 6,
       },
     ],
-  }
-  macdChart.setOption(option, true)
+  }, true)
 }
 </script>
 
@@ -171,8 +250,12 @@ function renderMACD(macd: any[]) {
 .header-left { display: flex; align-items: center; gap: 16px; }
 .stock-title { font-size: 18px; font-weight: bold; }
 .header-right { display: flex; gap: 12px; align-items: center; }
-.chart-section { flex: 1; display: flex; flex-direction: column; padding: 8px; min-height: 0; }
+.chart-section { display: flex; flex-direction: column; padding: 8px; min-height: 0; }
 .chart-title { font-size: 14px; color: #aaa; padding: 4px 8px; }
 .chart-container { flex: 1; min-height: 0; }
-.no-data { text-align: center; color: #888; padding: 40px; }
+.chanlun-panel, .signals-panel, .divergence-panel { padding: 8px 24px; }
+.panel-title { font-size: 14px; color: #aaa; margin-bottom: 8px; }
+.panel-items { display: flex; flex-wrap: wrap; gap: 8px; }
+.zs-item { display: flex; gap: 12px; align-items: center; background: rgba(255,215,0,0.1); padding: 4px 12px; border-radius: 4px; font-size: 13px; }
+.zs-badge { background: rgba(255,215,0,0.3); padding: 2px 6px; border-radius: 3px; }
 </style>
