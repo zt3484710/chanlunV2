@@ -30,7 +30,7 @@
       <div class="panel-title">中枢 ({{ chanlunData.zhongshu_list?.length }})</div>
       <div class="panel-items">
         <div v-for="(zs, i) in chanlunData.zhongshu_list" :key="i" class="zs-item">
-          <span class="zs-badge">中枢{{ i + 1 }}</span>
+          <span class="zs-badge">中枢{{ Number(i) + 1 }}</span>
           <span>ZD: {{ zs.zd?.toFixed(2) }}</span>
           <span>ZG: {{ zs.zg?.toFixed(2) }}</span>
           <span>中枢价: {{ zs.center?.toFixed(2) }}</span>
@@ -86,6 +86,8 @@ let macdChart: echarts.ECharts | null = null
 
 const klineData = ref<any[]>([])
 const macdData = ref<any[]>([])
+const macdDataL2 = ref<any[]>([])  // 第二层（上层周期）MACD
+const macdDataL3 = ref<any[]>([])  // 第三层（再上周期）MACD
 const chanlunData = ref<any>({})
 
 const periodOptions = [
@@ -100,7 +102,15 @@ const adjustOptions = [
   { label: '后复权', value: 'hfq' },
 ]
 
-const signalLabel = (type: string) => {
+// 周期层级映射：当前周期 -> [上层周期, 再上周期, 展开倍数]
+const periodHierarchy: Record<string, [string, string, number, number]> = {
+  '15min': ['60min', 'daily', 4, 24],    // 15分 -> 60分(×4) -> 日线(×24)
+  '60min': ['daily', 'weekly', 4, 5],    // 60分 -> 日线(×4) -> 周线(×5)
+  'daily': ['weekly', 'monthly', 5, 4],  // 日线 -> 周线(×5) -> 月线(×4)
+  'weekly': ['monthly', 'quarterly', 4, 3], // 周线 -> 月线(×4) -> 季线(×3)
+  'monthly': ['quarterly', 'yearly', 3, 4], // 月线 -> 季线(×3) -> 年线(×4)
+}
+const signalLabel = (type: string): string => {
   const map: Record<string, string> = {
     buy1: '一买', buy2: '二买', buy3: '三买',
     sell1: '一卖', sell2: '二卖', sell3: '三卖',
@@ -128,15 +138,49 @@ async function loadData() {
     const token = localStorage.getItem('token')
     const headers = { Authorization: `Bearer ${token}` }
 
-    // 并行请求K线和缠论数据
-    const [kRes, clRes] = await Promise.all([
-      api.get('/stocks/kline', { params: { stock_code: stockCode.value, period: period.value, adjust: adjust.value }, headers }),
-      api.get('/chanlun/analyze', { params: { stock_code: stockCode.value, period: period.value, adjust: adjust.value }, headers }),
-    ])
+    // 1. 获取当前周期的缠论数据（含K线和MACD）
+    const clRes = await api.get('/chanlun/analyze', {
+      params: { stock_code: stockCode.value, period: period.value, adjust: adjust.value, limit: 240 },
+      headers,
+    })
 
-    klineData.value = kRes.data.kline || []
-    macdData.value = kRes.data.macd || []
-    chanlunData.value = clRes.data || {}
+    const d = clRes.data || {}
+    klineData.value = d.kline || []
+    macdData.value = d.macd || []
+    chanlunData.value = d
+
+    // 2. 获取上层周期的MACD数据（用于三层叠加）
+    const hierarchy = periodHierarchy[period.value]
+    if (hierarchy) {
+      const [upperPeriod, upperUpperPeriod] = hierarchy
+      
+      // 获取第二层（上层周期）数据
+      try {
+        const l2Res = await api.get('/chanlun/analyze', {
+          params: { stock_code: stockCode.value, period: upperPeriod, adjust: adjust.value, limit: 240 },
+          headers,
+        })
+        macdDataL2.value = l2Res.data?.macd || []
+      } catch (e) {
+        console.warn('获取第二层MACD数据失败:', e)
+        macdDataL2.value = []
+      }
+      
+      // 获取第三层（再上周期）数据
+      try {
+        const l3Res = await api.get('/chanlun/analyze', {
+          params: { stock_code: stockCode.value, period: upperUpperPeriod, adjust: adjust.value, limit: 240 },
+          headers,
+        })
+        macdDataL3.value = l3Res.data?.macd || []
+      } catch (e) {
+        console.warn('获取第三层MACD数据失败:', e)
+        macdDataL3.value = []
+      }
+    } else {
+      macdDataL2.value = []
+      macdDataL3.value = []
+    }
 
     renderKline()
     renderMACD()
@@ -216,19 +260,47 @@ function renderMACD() {
   if (!macdChart || !macdData.value.length) return
 
   const dates = macdData.value.map((d: any) => d.date?.split('T')[0])
-  const dif = macdData.value.map((d: any) => d.dif)
-  const dea = macdData.value.map((d: any) => d.dea)
-  const bar = macdData.value.map((d: any) => d.macd)
+  const hierarchy = periodHierarchy[period.value] || ['', '', 1, 1]
+  const [, , repeatL2, repeatL3] = hierarchy
+
+  // 展开上层周期数据到当前周期长度
+  const expand = (arr: any[], repeat: number) => {
+    if (!arr.length) return []
+    return arr.flatMap(v => Array(repeat).fill(v))
+  }
+
+  const difL2 = expand(macdDataL2.value.map((d: any) => d.dif), repeatL2)
+  const deaL2 = expand(macdDataL2.value.map((d: any) => d.dea), repeatL2)
+  const difL3 = expand(macdDataL3.value.map((d: any) => d.dif), repeatL3)
+  const deaL3 = expand(macdDataL3.value.map((d: any) => d.dea), repeatL3)
+
+  // 截断到当前周期长度
+  const cutTo = (arr: number[], targetLen: number) => arr.slice(0, targetLen)
+  const dif = cutTo(macdData.value.map((d: any) => d.dif), dates.length)
+  const dea = cutTo(macdData.value.map((d: any) => d.dea), dates.length)
+  const bar = cutTo(macdData.value.map((d: any) => d.macd), dates.length)
 
   macdChart.setOption({
-    legend: { data: ['DIF', 'DEA'], top: 0 },
+    legend: { data: ['DIF', 'DEA', 'DIF(L2)', 'DEA(L2)', 'DIF(L3)', 'DEA(L3)'], top: 0 },
     tooltip: { trigger: 'axis' },
-    grid: [{ left: '8%', right: '2%', top: '15%', height: '40%' }],
+    grid: [{ left: '8%', right: '2%', top: '20%', height: '35%' }],
     xAxis: [{ type: 'category', data: dates, axisLabel: { fontSize: 10 } }],
     yAxis: [{ axisLabel: { fontSize: 10 } }],
     series: [
-      { name: 'DIF', type: 'line', data: dif, smooth: true },
-      { name: 'DEA', type: 'line', data: dea, smooth: true },
+      // 第一层（当前周期）
+      { name: 'DIF', type: 'line', data: dif, smooth: true, lineStyle: { color: '#ffffff', width: 1.5 } },
+      { name: 'DEA', type: 'line', data: dea, smooth: true, lineStyle: { color: '#ffff00', width: 1.5 } },
+      // 第二层（上层周期）
+      ...(difL2.length ? [
+        { name: 'DIF(L2)', type: 'line', data: cutTo(difL2, dates.length), smooth: true, lineStyle: { color: '#00ffff', width: 1 } },
+        { name: 'DEA(L2)', type: 'line', data: cutTo(deaL2, dates.length), smooth: true, lineStyle: { color: '#ff00ff', width: 1 } },
+      ] : []),
+      // 第三层（再上层周期）
+      ...(difL3.length ? [
+        { name: 'DIF(L3)', type: 'line', data: cutTo(difL3, dates.length), smooth: true, lineStyle: { color: '#00ff00', width: 1 } },
+        { name: 'DEA(L3)', type: 'line', data: cutTo(deaL3, dates.length), smooth: true, lineStyle: { color: '#ffa500', width: 1 } },
+      ] : []),
+      // 柱状图（只显示第一层）
       {
         type: 'bar',
         data: bar.map((v: number) => v >= 0 ? v : 0),

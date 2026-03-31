@@ -18,13 +18,19 @@ def analyze(
     stock_code: str = Query(..., description="股票代码，如 000001"),
     period: str = Query("daily", description="周期: daily/weekly/monthly"),
     adjust: str = Query("qfq", description="复权: qfq/hfq"),
+    limit: int = Query(240, description="K线数量限制"),
     current_user: User = Depends(get_current_user),
 ):
     """完整的缠论分析（分型/笔/线段/中枢/背驰/买卖点）"""
-    df = get_kline_data(stock_code, period, adjust)
+    df = get_kline_data(stock_code, period, adjust, limit=limit)
     if df.empty:
         return {"error": "无数据"}
     result = analyze_chanlun(df)
+    # 附带 kline 和 macd 数据，避免前端重复请求
+    from app.services.chanlun_analysis import calculate_macd
+    macd_df = calculate_macd(df)
+    result["kline"] = df.to_dict("records") if not df.empty else []
+    result["macd"] = macd_df.to_dict("records") if not macd_df.empty else []
     return result
 
 

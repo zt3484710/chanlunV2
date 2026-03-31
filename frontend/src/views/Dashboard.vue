@@ -39,7 +39,6 @@
                 <div class="stock-tags">
                   <n-tag v-for="s in wl.stocks" :key="s.id" round size="small" class="stock-tag" @click="router.push(`/stock/${s.stock_code}`)">
                     {{ s.stock_code }}
-                    <template #close>{{ s.stock_name }}</template>
                   </n-tag>
                 </div>
                 <n-button size="tiny" @click="openAddStock(wl)">+ 添加股票</n-button>
