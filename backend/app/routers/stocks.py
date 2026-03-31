@@ -12,11 +12,12 @@ router = APIRouter(prefix="/api/stocks", tags=["股票数据"])
 @router.get("/kline")
 def get_kline(
     stock_code: str = Query(..., description="股票代码，如 000001"),
-    period: str = Query("daily", description="周期: 15/30/60/daily/weekly/monthly"),
+    period: str = Query("daily", description="周期: 15min/60min/daily/weekly/monthly"),
     adjust: str = Query("qfq", description="复权: qfq/hfq"),
+    limit: int = Query(240, description="K线数量限制，默认240"),
     current_user: User = Depends(get_current_user),
 ):
-    return get_kline_with_indicators(stock_code, period, adjust)
+    return get_kline_with_indicators(stock_code, period, adjust, limit)
 
 
 @router.get("/quote")

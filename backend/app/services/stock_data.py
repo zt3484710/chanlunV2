@@ -69,10 +69,11 @@ def get_stock_info(stock_code: str) -> dict:
 
 def get_kline_data(
     stock_code: str,
-    period: Literal["daily", "weekly", "monthly"] = "daily",
+    period: Literal["daily", "weekly", "monthly", "15min", "60min"] = "daily",
     adjust: Literal["qfq", "hfq", ""] = "qfq",
     start_date: str = "2020-01-01",
     end_date: str = "2050-01-01",
+    limit: int = 240,
 ) -> pd.DataFrame:
     """获取K线数据（baostock 接口）"""
     _ensure_login()
@@ -82,17 +83,23 @@ def get_kline_data(
         return cached
 
     try:
-        # baostock frequency: d=日线, w=周线, m=月线
-        freq_map = {"daily": "d", "weekly": "w", "monthly": "m"}
+        # baostock frequency: d=日, w=周, m=月, 5/15/30/60 分钟
+        freq_map = {"daily": "d", "weekly": "w", "monthly": "m", "15min": "15", "60min": "60"}
         freq = freq_map.get(period, "d")
 
-        # adjust: 复权类型：1=后复权 2=前复权 3=不复权
+        # adjust: 复权类型：1=后复权 2=前复权 3=不复权（分钟数据不支持复权）
         adjust_map = {"qfq": "2", "hfq": "1", "": "3"}
-        adjtype = adjust_map.get(adjust, "3")
+        adjtype = adjust_map.get(adjust, "3") if period == "daily" else "3"
+
+        # 分钟数据字段不同
+        if freq in ("15", "60"):
+            fields = "date,time,open,high,low,close,volume"
+        else:
+            fields = "date,open,high,low,close,volume,amount"
 
         rs = bs.query_history_k_data_plus(
             _to_bs_code(stock_code),
-            "date,open,high,low,close,volume,amount",
+            fields,
             start_date=start_date,
             end_date=end_date,
             frequency=freq,
@@ -106,16 +113,30 @@ def get_kline_data(
         if not data:
             return pd.DataFrame()
 
-        df = pd.DataFrame(data, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+        if freq in ("15", "60"):
+            # 分钟数据：合并 date + time
+            df = pd.DataFrame(data, columns=["date", "time", "open", "high", "low", "close", "volume"])
+            df["datetime"] = pd.to_datetime(df["date"] + " " + df["time"].str[:4], format="%Y-%m-%d %H%M")
+            df.drop(["date", "time"], axis=1, inplace=True)
+            df.rename(columns={"datetime": "date"}, inplace=True)
+        else:
+            df = pd.DataFrame(data, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+            df["date"] = pd.to_datetime(df["date"])
+
         # 转换数值列
-        for col in ["open", "high", "low", "close", "volume", "amount"]:
+        for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        df["date"] = pd.to_datetime(df["date"])
+        if "amount" in df.columns:
+            df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+
         df.sort_values("date", inplace=True)
         df.reset_index(drop=True, inplace=True)
         df = df[df["close"].notna()]
 
         _set_cache(cache_key, df)
+        # 限制返回条数
+        if limit > 0 and len(df) > limit:
+            df = df.iloc[-limit:]
         return df
     except Exception as e:
         return pd.DataFrame({"error": [str(e)]})

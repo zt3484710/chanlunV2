@@ -89,6 +89,8 @@ const macdData = ref<any[]>([])
 const chanlunData = ref<any>({})
 
 const periodOptions = [
+  { label: '15分钟', value: '15min' },
+  { label: '60分钟', value: '60min' },
   { label: '日线', value: 'daily' },
   { label: '周线', value: 'weekly' },
   { label: '月线', value: 'monthly' },

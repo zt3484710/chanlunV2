@@ -67,9 +67,10 @@ def get_kline_with_indicators(
     stock_code: str,
     period: str = "daily",
     adjust: str = "qfq",
+    limit: int = 240,
 ) -> dict:
     """获取K线数据及指标（供前端使用）"""
-    df = get_kline_data(stock_code, period, adjust)
+    df = get_kline_data(stock_code, period, adjust, limit=limit)
     if df.empty:
         return {"error": "无数据"}
 
