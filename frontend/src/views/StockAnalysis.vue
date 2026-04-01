@@ -164,8 +164,8 @@ async function loadData() {
     klineData.value = d.kline || []
     macdData.value = d.macd || []
     chanlunData.value = d
-    macdDataL2.value = []
-    macdDataL3.value = []
+    macdDataL2.value = d.macd_l2 || []
+    macdDataL3.value = d.macd_l3 || []
     renderKline()
     renderMACD()
   } finally {
@@ -187,13 +187,23 @@ function renderKline() {
     symbol: 'triangle', symbolSize: 7,
     itemStyle: { color: f.type === 'top' ? '#ef5350' : '#26a69a' },
   }))
+  // T5: 笔用粗线绘制
   const biMarkLines = bi.map((b: any) => ({
     xAxis: b.start_index, yAxis: b.start_price,
     xAxis2: b.end_index, yAxis2: b.end_price,
-    lineStyle: { color: b.direction === 'up' ? '#ef5350' : '#26a69a', width: 1 },
+    lineStyle: { color: b.direction === 'up' ? '#ef5350' : '#26a69a', width: 2.5, type: 'solid' },
   }))
+
+  // T5: 线段用虚线绘制
+  const xianduan = chanlunData.value.xianduan_list || []
+  const xianduanMarkLines = xianduan.map((xd: any) => ({
+    xAxis: xd.start_index, yAxis: xd.start_price,
+    xAxis2: xd.end_index, yAxis2: xd.end_price,
+    lineStyle: { color: xd.direction === 'up' ? '#ff6b6b' : '#4ecdc4', width: 2, type: 'dashed' },
+  }))
+  // T5: 中枢用填充矩形绘制
   const zsMarkAreas = zhongshu.map((zs: any) => [
-    { xAxis: zs.start_index, yAxis: zs.zd, itemStyle: { color: 'rgba(255,215,0,0.12)' } },
+    { xAxis: zs.start_index, yAxis: zs.zd, itemStyle: { color: 'rgba(255,215,0,0.25)' } },
     { xAxis: zs.end_index, yAxis: zs.zg },
   ])
   const signalMark = signals.slice(0, 30).map((s: any) => ({
@@ -211,7 +221,7 @@ function renderKline() {
       type: 'candlestick', data: ohlc,
       itemStyle: { color: '#ef5350', color0: '#26a69a' },
       markPoint: { data: [...fenxingMark, ...signalMark] },
-      markLine: { silent: true, symbol: 'none', data: biMarkLines },
+      markLine: { silent: true, symbol: 'none', data: [...biMarkLines, ...xianduanMarkLines] },
       markArea: { silent: true, data: zsMarkAreas },
     }],
   }, true)
@@ -242,12 +252,12 @@ function renderMACD() {
       { name: 'DIF', type: 'line', data: dif, smooth: true, lineStyle: { color: '#fff', width: 1.5 } },
       { name: 'DEA', type: 'line', data: dea, smooth: true, lineStyle: { color: '#ffff00', width: 1.5 } },
       ...(difL2.length ? [
-        { name: 'DIF(L2)', type: 'line', data: difL2, smooth: true, lineStyle: { color: '#00ffff', width: 1 } },
-        { name: 'DEA(L2)', type: 'line', data: deaL2, smooth: true, lineStyle: { color: '#ff00ff', width: 1 } },
+        { name: 'DIF(L2)', type: 'line', data: difL2, smooth: true, lineStyle: { color: '#0FF', width: 1 } },
+        { name: 'DEA(L2)', type: 'line', data: deaL2, smooth: true, lineStyle: { color: '#F0F', width: 1 } },
       ] : []),
       ...(difL3.length ? [
-        { name: 'DIF(L3)', type: 'line', data: difL3, smooth: true, lineStyle: { color: '#00ff00', width: 1 } },
-        { name: 'DEA(L3)', type: 'line', data: deaL3, smooth: true, lineStyle: { color: '#ffa500', width: 1 } },
+        { name: 'DIF(L3)', type: 'line', data: difL3, smooth: true, lineStyle: { color: '#0F0', width: 1 } },
+        { name: 'DEA(L3)', type: 'line', data: deaL3, smooth: true, lineStyle: { color: '#FA0', width: 1 } },
       ] : []),
       { type: 'bar', data: bar.map((v: number) => v >= 0 ? v : 0), itemStyle: { color: '#ef5350' }, barMaxWidth: 4 },
       { type: 'bar', data: bar.map((v: number) => v < 0 ? v : 0), itemStyle: { color: '#26a69a' }, barMaxWidth: 4 },
