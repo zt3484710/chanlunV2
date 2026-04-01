@@ -1,4 +1,4 @@
 #!/bin/bash
-cd /data/chanlun/frontend
+cd /root/.openclaw/workspace/projects/chanlun/frontend
 pnpm install
 pnpm dev

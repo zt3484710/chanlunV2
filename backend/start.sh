@@ -13,7 +13,7 @@ else
     echo "[MySQL] 已运行"
 fi
 
-cd /data/chanlun/backend
+cd /root/.openclaw/workspace/projects/chanlun/backend
 
 # 安装依赖（如缺失）
 pip install -r requirements.txt -q

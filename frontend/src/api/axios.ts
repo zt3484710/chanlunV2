@@ -22,7 +22,10 @@ api.interceptors.response.use(
   (err) => {
     if (err.response?.status === 401) {
       localStorage.removeItem('token')
-      router.push('/login')
+      // 如果不在登录页，才跳转
+      if (router.currentRoute.value.name !== 'login') {
+        router.push('/login')
+      }
     }
     return Promise.reject(err)
   }
