@@ -19,10 +19,6 @@
         <div class="chart-title">K线 + 缠论</div>
         <div ref="klineRef" class="chart-container"></div>
       </div>
-      <div class="chart-section">
-        <div class="chart-title">MACD</div>
-        <div ref="macdRef" class="chart-container"></div>
-      </div>
     </div>
 
     <!-- 底部数据面板（折叠） -->
@@ -100,9 +96,7 @@ const adjust = ref('qfq')
 const loading = ref(false)
 
 const klineRef = ref<HTMLDivElement>()
-const macdRef = ref<HTMLDivElement>()
 let klineChart: echarts.ECharts | null = null
-let macdChart: echarts.ECharts | null = null
 
 const klineData = ref<any[]>([])
 const macdData = ref<any[]>([])
@@ -139,17 +133,16 @@ const signalLabel = (type: string): string => {
 }
 
 onMounted(() => { initCharts(); window.addEventListener('resize', handleResize) })
-onUnmounted(() => { klineChart?.dispose(); macdChart?.dispose(); window.removeEventListener('resize', handleResize) })
+onUnmounted(() => { klineChart?.dispose(); window.removeEventListener('resize', handleResize) })
 
 // T3: watch stockCode, adjust, period changes and auto reload
 watch([stockCode, adjust, period], () => loadData(), { immediate: true })
 
 function initCharts() {
   if (klineRef.value) klineChart = echarts.init(klineRef.value)
-  if (macdRef.value) macdChart = echarts.init(macdRef.value)
 }
 
-function handleResize() { klineChart?.resize(); macdChart?.resize() }
+function handleResize() { klineChart?.resize() }
 
 async function loadData() {
   loading.value = true
@@ -167,7 +160,6 @@ async function loadData() {
     macdDataL2.value = d.macd_l2 || []
     macdDataL3.value = d.macd_l3 || []
     renderKline()
-    renderMACD()
   } finally {
     loading.value = false
   }
@@ -175,95 +167,196 @@ async function loadData() {
 
 function renderKline() {
   if (!klineChart || !klineData.value.length) return
+
   const dates = klineData.value.map((d: any) => d.date?.split('T')[0])
   const ohlc = klineData.value.map((d: any) => [d.open, d.close, d.low, d.high])
+  const volumes = klineData.value.map((d: any) => d.volume)
   const fenxing = chanlunData.value.fenxing_list || []
   const bi = chanlunData.value.bi_list || []
   const zhongshu = chanlunData.value.zhongshu_list || []
   const signals = chanlunData.value.signals || []
+  const xianduan = chanlunData.value.xianduan_list || []
+
+  // 构建笔的 line 系列（P1：从 markLine 改为独立 line 系列）
+  const biSeries: any[] = bi.map((b: any, idx: number) => ({
+    name: `笔${idx + 1}`,
+    type: 'line',
+    data: [
+      [b.start_index, b.start_price],
+      [b.end_index, b.end_price]
+    ],
+    symbol: 'none',
+    lineStyle: {
+      color: b.direction === 'up' ? '#ef5350' : '#26a69a',
+      width: 2.5,
+      type: 'solid'
+    }
+  }))
+
+  // 构建线段的 line 系列
+  const xdSeries: any[] = xianduan.map((xd: any, idx: number) => ({
+    name: `线段${idx + 1}`,
+    type: 'line',
+    data: [
+      [xd.start_index, xd.start_price],
+      [xd.end_index, xd.end_price]
+    ],
+    symbol: 'none',
+    lineStyle: {
+      color: xd.direction === 'up' ? '#ff6b6b' : '#4ecdc4',
+      width: 2,
+      type: 'dashed'
+    }
+  }))
 
   const fenxingMark = fenxing.map((f: any) => ({
     coord: [f.index, f.price],
     symbol: 'triangle', symbolSize: 7,
     itemStyle: { color: f.type === 'top' ? '#ef5350' : '#26a69a' },
   }))
-  // T5: 笔用粗线绘制
-  const biMarkLines = bi.map((b: any) => ({
-    xAxis: b.start_index, yAxis: b.start_price,
-    xAxis2: b.end_index, yAxis2: b.end_price,
-    lineStyle: { color: b.direction === 'up' ? '#ef5350' : '#26a69a', width: 2.5, type: 'solid' },
-  }))
 
-  // T5: 线段用虚线绘制
-  const xianduan = chanlunData.value.xianduan_list || []
-  const xianduanMarkLines = xianduan.map((xd: any) => ({
-    xAxis: xd.start_index, yAxis: xd.start_price,
-    xAxis2: xd.end_index, yAxis2: xd.end_price,
-    lineStyle: { color: xd.direction === 'up' ? '#ff6b6b' : '#4ecdc4', width: 2, type: 'dashed' },
-  }))
-  // T5: 中枢用填充矩形绘制
   const zsMarkAreas = zhongshu.map((zs: any) => [
     { xAxis: zs.start_index, yAxis: zs.zd, itemStyle: { color: 'rgba(255,215,0,0.25)' } },
     { xAxis: zs.end_index, yAxis: zs.zg },
   ])
+
   const signalMark = signals.slice(0, 30).map((s: any) => ({
     coord: [s.position, s.price],
     symbol: s.type.startsWith('buy') ? 'circle' : 'diamond', symbolSize: 8,
     itemStyle: { color: s.type.startsWith('buy') ? '#18a058' : '#d43030' },
   }))
 
-  klineChart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-    grid: [{ left: '2%', right: '2%', top: '8%', height: '78%' }],
-    xAxis: [{ type: 'category', data: dates, axisLabel: { fontSize: 9, interval: Math.floor(dates.length / 6) } }],
-    yAxis: [{ scale: true, axisLabel: { fontSize: 9 } }],
-    series: [{
-      type: 'candlestick', data: ohlc,
+  // P2：5个grid布局（K线/成交量/MACD1/MACD2/MACD3）
+  const gridTop = 4
+  const gridHeightKline = 35
+  const gridHeightVolume = 10
+  const gridHeightMacd = 12
+  const gridGap = 2
+
+  // MACD 数据处理
+  const macd1Dates = macdData.value.map((d: any) => d.date?.split('T')[0])
+  const macd2Dates = macdDataL2.value.map((d: any) => d.date?.split('T')[0])
+  const macd3Dates = macdDataL3.value.map((d: any) => d.date?.split('T')[0])
+
+  const hierarchy = periodHierarchy[period.value] || ['', '', 1, 1]
+  const periodNames: Record<string, string> = {
+    '15min': '15分钟', '60min': '60分钟', 'daily': '日线',
+    'weekly': '周线', 'monthly': '月线', 'quarterly': '季线', 'yearly': '年线'
+  }
+  const p1Name = periodNames[period.value] || period.value
+  const p2Name = periodNames[hierarchy[0]] || hierarchy[0]
+  const p3Name = periodNames[hierarchy[1]] || hierarchy[1]
+
+  const grid = [
+    { left: '2%', right: '2%', top: `${gridTop}%`, height: `${gridHeightKline}%` },
+    { left: '2%', right: '2%', top: `${gridTop + gridHeightKline + gridGap}%`, height: `${gridHeightVolume}%` },
+    { left: '2%', right: '2%', top: `${gridTop + gridHeightKline + gridHeightVolume + gridGap * 2}%`, height: `${gridHeightMacd}%` },
+    { left: '2%', right: '2%', top: `${gridTop + gridHeightKline + gridHeightVolume + gridHeightMacd + gridGap * 3}%`, height: `${gridHeightMacd}%` },
+    { left: '2%', right: '2%', top: `${gridTop + gridHeightKline + gridHeightVolume + gridHeightMacd * 2 + gridGap * 4}%`, height: `${gridHeightMacd}%` },
+  ]
+
+  const xAxis = [
+    { type: 'category', data: dates, axisLabel: { show: false }, gridIndex: 0 },
+    { type: 'category', data: dates, axisLabel: { show: false }, gridIndex: 1 },
+    { type: 'category', data: macd1Dates, axisLabel: { show: false }, gridIndex: 2 },
+    { type: 'category', data: macd2Dates, axisLabel: { show: false }, gridIndex: 3 },
+    { type: 'category', data: macd3Dates, axisLabel: { fontSize: 9, interval: Math.floor(macd3Dates.length / 6) }, gridIndex: 4 },
+  ]
+
+  const yAxis = [
+    { scale: true, axisLabel: { fontSize: 9 }, gridIndex: 0 },
+    { scale: true, axisLabel: { fontSize: 9 }, gridIndex: 1 },
+    { scale: true, axisLabel: { fontSize: 9 }, gridIndex: 2, name: `${p1Name}`, nameTextStyle: { fontSize: 10, color: '#aaa' } },
+    { scale: true, axisLabel: { fontSize: 9 }, gridIndex: 3, name: `${p2Name}`, nameTextStyle: { fontSize: 10, color: '#aaa' } },
+    { scale: true, axisLabel: { fontSize: 9 }, gridIndex: 4, name: `${p3Name}`, nameTextStyle: { fontSize: 10, color: '#aaa' } },
+  ]
+
+  const series: any[] = [
+    // K线
+    {
+      type: 'candlestick',
+      xAxisIndex: 0,
+      yAxisIndex: 0,
+      data: ohlc,
       itemStyle: { color: '#ef5350', color0: '#26a69a' },
       markPoint: { data: [...fenxingMark, ...signalMark] },
-      markLine: { silent: true, symbol: 'none', data: [...biMarkLines, ...xianduanMarkLines] },
       markArea: { silent: true, data: zsMarkAreas },
-    }],
-  }, true)
-}
+    },
+    // 成交量
+    {
+      type: 'bar',
+      xAxisIndex: 1,
+      yAxisIndex: 1,
+      data: volumes,
+      itemStyle: {
+        color: (params: any) => {
+          const idx = params.dataIndex
+          return ohlc[idx][1] >= ohlc[idx][0] ? '#ef5350' : '#26a69a'
+        }
+      }
+    },
+    // MACD 第一层（当前周期）
+    {
+      name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2,
+      data: macdData.value.map((d: any) => d.dif),
+      smooth: true, lineStyle: { color: '#fff', width: 1.5 }, symbol: 'none'
+    },
+    {
+      name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2,
+      data: macdData.value.map((d: any) => d.dea),
+      smooth: true, lineStyle: { color: '#ffff00', width: 1.5 }, symbol: 'none'
+    },
+    {
+      type: 'bar', xAxisIndex: 2, yAxisIndex: 2,
+      data: macdData.value.map((d: any) => d.macd >= 0 ? d.macd : 0),
+      itemStyle: { color: '#ef5350' }, barMaxWidth: 4
+    },
+    {
+      type: 'bar', xAxisIndex: 2, yAxisIndex: 2,
+      data: macdData.value.map((d: any) => d.macd < 0 ? d.macd : 0),
+      itemStyle: { color: '#26a69a' }, barMaxWidth: 4
+    },
+    // MACD 第二层（上一级）
+    {
+      name: 'DIF(L2)', type: 'line', xAxisIndex: 3, yAxisIndex: 3,
+      data: macdDataL2.value.map((d: any) => d.dif),
+      smooth: true, lineStyle: { color: '#0FF', width: 1.5 }, symbol: 'none'
+    },
+    {
+      name: 'DEA(L2)', type: 'line', xAxisIndex: 3, yAxisIndex: 3,
+      data: macdDataL2.value.map((d: any) => d.dea),
+      smooth: true, lineStyle: { color: '#F0F', width: 1.5 }, symbol: 'none'
+    },
+    // MACD 第三层（上上级）
+    {
+      name: 'DIF(L3)', type: 'line', xAxisIndex: 4, yAxisIndex: 4,
+      data: macdDataL3.value.map((d: any) => d.dif),
+      smooth: true, lineStyle: { color: '#0F0', width: 1.5 }, symbol: 'none'
+    },
+    {
+      name: 'DEA(L3)', type: 'line', xAxisIndex: 4, yAxisIndex: 4,
+      data: macdDataL3.value.map((d: any) => d.dea),
+      smooth: true, lineStyle: { color: '#FA0', width: 1.5 }, symbol: 'none'
+    },
+    // 笔和线段系列
+    ...biSeries.map(s => ({ ...s, xAxisIndex: 0, yAxisIndex: 0 })),
+    ...xdSeries.map(s => ({ ...s, xAxisIndex: 0, yAxisIndex: 0 })),
+  ]
 
-function renderMACD() {
-  if (!macdChart || !macdData.value.length) return
-  const dates = macdData.value.map((d: any) => d.date?.split('T')[0])
-  const hierarchy = periodHierarchy[period.value] || ['', '', 1, 1]
-  const [, , repeatL2, repeatL3] = hierarchy
-  const expand = (arr: any[], rep: number) => arr.length ? arr.flatMap(v => Array(rep).fill(v)) : []
-  const cutTo = (arr: number[], len: number) => arr.slice(0, len)
-  const dif = cutTo(macdData.value.map((d: any) => d.dif), dates.length)
-  const dea = cutTo(macdData.value.map((d: any) => d.dea), dates.length)
-  const bar = cutTo(macdData.value.map((d: any) => d.macd), dates.length)
-  const difL2 = cutTo(expand(macdDataL2.value.map((d: any) => d.dif), repeatL2), dates.length)
-  const deaL2 = cutTo(expand(macdDataL2.value.map((d: any) => d.dea), repeatL2), dates.length)
-  const difL3 = cutTo(expand(macdDataL3.value.map((d: any) => d.dif), repeatL3), dates.length)
-  const deaL3 = cutTo(expand(macdDataL3.value.map((d: any) => d.dea), repeatL3), dates.length)
-
-  macdChart.setOption({
-    legend: { data: ['DIF', 'DEA', 'L2', 'L3'], top: 0 },
-    tooltip: { trigger: 'axis' },
-    grid: [{ left: '2%', right: '2%', top: '18%', height: '32%' }],
-    xAxis: [{ type: 'category', data: dates, axisLabel: { fontSize: 9, interval: Math.floor(dates.length / 6) } }],
-    yAxis: [{ axisLabel: { fontSize: 9 } }],
-    series: [
-      { name: 'DIF', type: 'line', data: dif, smooth: true, lineStyle: { color: '#fff', width: 1.5 } },
-      { name: 'DEA', type: 'line', data: dea, smooth: true, lineStyle: { color: '#ffff00', width: 1.5 } },
-      ...(difL2.length ? [
-        { name: 'DIF(L2)', type: 'line', data: difL2, smooth: true, lineStyle: { color: '#0FF', width: 1 } },
-        { name: 'DEA(L2)', type: 'line', data: deaL2, smooth: true, lineStyle: { color: '#F0F', width: 1 } },
-      ] : []),
-      ...(difL3.length ? [
-        { name: 'DIF(L3)', type: 'line', data: difL3, smooth: true, lineStyle: { color: '#0F0', width: 1 } },
-        { name: 'DEA(L3)', type: 'line', data: deaL3, smooth: true, lineStyle: { color: '#FA0', width: 1 } },
-      ] : []),
-      { type: 'bar', data: bar.map((v: number) => v >= 0 ? v : 0), itemStyle: { color: '#ef5350' }, barMaxWidth: 4 },
-      { type: 'bar', data: bar.map((v: number) => v < 0 ? v : 0), itemStyle: { color: '#26a69a' }, barMaxWidth: 4 },
+  klineChart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    dataZoom: [
+      { type: 'inside', xAxisIndex: [0, 1, 2, 3, 4], start: 0, end: 100 },
+      { type: 'slider', xAxisIndex: [0, 1, 2, 3, 4], bottom: 2, start: 0, end: 100 }
     ],
+    grid,
+    xAxis,
+    yAxis,
+    series,
   }, true)
 }
+
+
 </script>
 
 <style scoped>
